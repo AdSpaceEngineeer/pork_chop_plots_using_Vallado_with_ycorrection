@@ -1,0 +1,381 @@
+# import packages
+import numpy as np
+import math
+import datetime
+import matplotlib.pyplot as plt
+
+#Stumpff functions
+def func_C(z):
+    if z>0:
+        c = (1-math.cos(np.sqrt(z)))/z
+    elif z < 0 : 
+        c = (math.cosh(np.sqrt(-z)) - 1)/(-z)
+    else: 
+        c = 1/2
+    return c
+
+def func_S(z):
+    if z>0: 
+        s = (np.sqrt(z) - math.sin(np.sqrt(z)))/ (np.sqrt(z))**3
+    elif z<0 : 
+        s = (math.sinh(np.sqrt(-z)) - np.sqrt(-z))/ (np.sqrt(-z))**3
+    else: 
+        s = 1/6
+    return s
+    
+def func_UVOrbitProp(state_0, mu, t0, t1, tol):
+    
+    #Stumpff functions 'func_C' and 'func_S' need to be defined before running this function
+    #This function returns orbit state as an array [rx, ry, rz, vx, vy, vz]
+    #And needs four arguments : initial orbit state as list or array, mu of central body, start time in seconds, end time in seconds, tolerance for iterator
+    
+    # given conditions
+    rx_0 = state_0[0]
+    ry_0 = state_0[1]
+    rz_0 = state_0[2]
+    vx_0 = state_0[3]
+    vy_0 = state_0[4]
+    vz_0 = state_0[5]
+    t_0 = t0
+    t = t1
+    tol = tol
+
+    #state_0 = [rx_0, ry_0, rz_0, vx_0, vy_0, vz_0]
+
+    #compute value of r_0
+    r_0 = np.sqrt(sum(n**2 for n in state_0[:3]))
+    #print("r0 =", r_0)
+
+    #compute of v_0
+    v_0 = np.sqrt(sum(n**2 for n in state_0[3:6]))
+    #print("v0 =", v_0)
+
+    #compute semi-major axis 'a' and check positive/negative sign
+    a = 1 / (2/r_0 - v_0**2/mu)
+    #print("a = ", a)
+    #if a>0:
+    #   print("orbit is not a hyperbola because a is positive")
+    #else:
+    #   print("orbit is a hyperbola, use -a in subsequent computations")
+
+    #compute inverse of a to use in f, f_d, g, g_d formulae
+    a_inv = 1/a
+
+    #determine radial component of v_0
+    v_0_rad = np.dot(state_0[3:6], (state_0[:3]/r_0)) 
+    #print("radial component of v0 = ", round(v_0_rad,3))
+
+    #compute eccentricity e using h and E
+    h_vec = np.cross(state_0[:3], state_0[3:6])
+    #print("h vector is ", h_vec)
+    h_scal = np.sqrt(sum(n**2 for n in h_vec))
+    #print("h scalar is ", h_scal)
+    E = (v_0**2 / 2) - mu/r_0
+    #print("Energy is ", E)
+    e = np.sqrt(1 + (2*E*(h_scal**2)/(mu**2)))
+    #print("eccentricity is ", e)
+
+
+    #initial guess of x, assuming a is positive i.e. orbit is NOT hyperbola
+    x_guess = np.sqrt(mu)*(t - t_0)*np.abs(a_inv)
+    #print("first guess of X is ", x_guess)
+
+    #find best x within defined tolerance
+    x_i = x_guess
+    n = 0
+    ratio = 1
+
+    while abs(ratio) > tol and n <= 100:
+        n+=1    
+        zi = a_inv * x_i**2
+
+        Ci = func_C(zi)
+        Si = func_S(zi)
+
+        f = ((r_0*v_0_rad)/np.sqrt(mu))*(x_i**2)*Ci + (1-a_inv*r_0)*(x_i**3)*Si + r_0*x_i - np.sqrt(mu)*(t-t_0)
+        f_d = ((r_0*v_0_rad)/np.sqrt(mu))*x_i*(1 - a_inv*(x_i**2)*Si) + (1 - a_inv*r_0)*(x_i**2)*Ci + r_0
+
+        ratio = f/f_d
+        x_i = x_i - ratio
+        #print(n, "\t", ratio, "\t", x_i)
+
+    #print("best value of X within tolerance is ", x_i, " starting with X_guess at ", x_guess, " after", n, " iterations.")
+
+    #compute f, g, r(t), f_d, g_d, v(t) with the best value of X
+    x = x_i
+    z = a_inv*x**2
+    f = 1 - (x**2/r_0)*func_C(z)
+    g = (t - t_0) - (np.sqrt(1/mu))*(x**3)*func_S(z)
+
+    r_t_vec = f*np.array([rx_0, ry_0, rz_0]) + g*np.array([vx_0, vy_0, vz_0])
+    #print ("position vector r(t) is ", r_t_vec, "km")
+
+    r_t_scal = np.sqrt(sum(n**2 for n in r_t_vec))
+    f_d = (np.sqrt(mu)/(r_t_scal*r_0))*(a_inv*(x**3)*func_S(z) - x)
+    g_d = 1 - ((x**2)/r_t_scal)*func_C(z)
+
+    v_t_vec = f_d*np.array([rx_0, ry_0, rz_0]) + g_d*np.array([vx_0, vy_0, vz_0])
+    #print ("velocity vector v(t) is ", v_t_vec, "km/s")
+    
+    state_t = np.concatenate((r_t_vec, v_t_vec))
+    
+    return state_t
+
+#calculate theta for prograde and retrograde orbits from r1, vE, r2, vA
+def func_theta_pro_and_retro(state_0, state_1):
+    
+    r1_vec = np.array(state_0[:3])
+    
+    r2_vec = np.array(state_1[:3])
+    
+    r1 = np.sqrt(sum(n**2 for n in r1_vec))
+    #print(r1, "km is r1")  
+
+    r2 = np.sqrt(sum(n**2 for n in r2_vec))
+    #print(r2, "km is r2")
+
+    h_z = np.cross(r1_vec, r2_vec)[2]
+    #print(h_z, " is the z component of r1_vec x r2_vec")
+
+    if h_z < 0:
+        theta_pro = 2*math.pi - math.acos(np.dot(r1_vec, r2_vec)/(r1*r2))
+    else:
+        theta_pro = math.acos(np.dot(r1_vec, r2_vec)/(r1*r2))
+
+    #print(theta_pro, "radians is the angle between r1 and r2 for prograde orbit")
+
+    theta_retro = 2*math.pi - theta_pro
+    #print(theta_retro, "radians is the angle between r1 and r2 for retrograde orbit")
+    
+    return (theta_pro, theta_retro, r1, r2)
+
+def func_transfer_possible_check(theta, r1, r2, mu, tof):
+    
+    c = np.sqrt(r1**2 + r2**2 - 2*r1*r2*math.cos(theta))
+    #print(c, "km is the c chord length")
+
+    s = (r1 + r2 + c)/2
+    #print (s, "km is the s semiperimeter of space triangle")
+
+    a_min = s/2
+    #print(a_min, "km is the a_min")
+
+    beta_min = 2*math.asin(np.sqrt(1-c/s))
+    
+    alpha_min = math.pi
+
+    t_min = (np.sqrt(a_min**3/mu))*(math.pi - beta_min + math.sin(beta_min))
+    #print(t_min, "sec is the t_min, as compared to ", tof, "sec the actual time of flight")
+
+    tp = (1/3)*np.sqrt(2/mu)*(s**(3/2) - np.sign(math.sin(theta))*(s-c)**(3/2))
+    #print(tp, "sec is the minimum possible time of flight")
+
+    return tof>tp
+    #print("is transfer possible ?", tof > tp)
+    #print("is tof < t_min ?", tof<t_min)
+
+## 
+def func_Lambert_vdep_varr_Vallado_ycorrection(state_0, state_1, theta, tol, tof, mu):
+    
+    r1_vec = np.array(state_0[0:3])
+    #print(r1_vec)
+    
+    r2_vec = np.array(state_1[0:3])
+    #print(r2_vec)
+    
+    r1 = np.sqrt(sum(n**2 for n in r1_vec))
+    #print(r1)
+
+    r2 = np.sqrt(sum(n**2 for n in r2_vec))
+    #print(r2)
+    
+    A = math.sin(theta)*np.sqrt(r1*r2/(1-math.cos(theta)))
+    #print(A)
+    
+    if theta>=math.pi:  
+        z_hi = 4*math.pi**2
+        z_lo = -4*math.pi**2
+        n = 0
+        zi=0
+        while (abs(z_hi-z_lo) > tol) and (n <= 100):
+            n+=1
+            #zi = (z_hi + z_lo)/2
+            C = func_C(zi)
+            S = func_S(zi)
+            y = r1 + r2 + A*(zi*S-1)/np.sqrt(C) 
+            #print(y)
+            f = S*(y/C)**(3/2) + A*np.sqrt(y) - tof*np.sqrt(mu)
+            #print(f)
+            if f < 0 :
+                z_lo = zi
+            else :
+                z_hi = zi
+            zi = (z_hi + z_lo)/2
+    else:
+    
+        y=-10
+        z_lo=-10
+        while (y<0):
+            C = func_C(z_lo)
+            S = func_S(z_lo)
+            y = r1 + r2 + A*(z_lo*S-1)/np.sqrt(C)
+            z_lo=z_lo+0.5
+        z_hi = 4*math.pi**2
+        n = 0
+        zi = (z_hi + z_lo)/2
+        while (abs(z_hi-z_lo) > tol) and (n <= 100):
+            n+=1
+            C = func_C(zi)
+            S = func_S(zi)
+            y = r1 + r2 + A*(zi*S-1)/np.sqrt(C) 
+            f = S*(y/C)**(3/2) + A*np.sqrt(y) - tof*np.sqrt(mu)
+            if f < 0 :
+                z_lo = zi
+            else :
+                z_hi = zi
+            zi = (z_hi + z_lo)/2
+    
+    z = zi
+    C = func_C(z)
+    S = func_S(z)
+    y = r1 + r2 + A*(z*S-1)/np.sqrt(C) 
+
+    f = 1 - y/r1
+    g = A*np.sqrt(y/mu)
+    g_dot = 1 - y/r2
+    #f_dot = (f*g_dot-1)/g
+    
+    v_dep_vec = (1/g)*(r2_vec-f*r1_vec)
+    v_arr_vec = (1/g)*(g_dot*r2_vec - r1_vec)
+    
+    return (v_dep_vec, v_arr_vec)
+
+# matrix of departure, arrivals and TOFs
+
+def func_tof_grid(dep1_str_mdyy, dep2_str_mdyy, arr1_str_mdyy, arr2_str_mdyy):
+    
+    dep1_date = datetime.datetime.strptime(dep1_str_mdyy, '%m/%d/%y').date()
+    dep2_date = datetime.datetime.strptime(dep2_str_mdyy, '%m/%d/%y').date()
+    
+    arr1_date = datetime.datetime.strptime(arr1_str_mdyy, '%m/%d/%y').date()
+    arr2_date = datetime.datetime.strptime(arr2_str_mdyy, '%m/%d/%y').date()
+    
+    dep_count = (dep2_date - dep1_date).days + 1
+    arr_count = (arr2_date - arr1_date).days + 1
+    first_tof_days = (arr1_date - dep1_date).days + 1
+    
+    tof_grid = np.zeros((arr_count, dep_count))
+    
+    for d in np.arange(dep_count):
+        for a in np.arange(arr_count):
+            val = first_tof_days + (a-d) - 1
+            tof_grid[a,d] = val *24*60*60
+    
+    return (tof_grid, arr_count, dep_count)
+
+def func_calc_deltaV(state_launch, state_target, v_dep_vec, v_arr_vec, v_up_lim, v_low_lim):
+    
+    deltaV_launch = np.sqrt(sum(n**2 for n in state_launch[3:6] - v_dep_vec))
+    deltaV_target = np.sqrt(sum(n**2 for n in state_target[3:6] - v_arr_vec))
+    
+    #deltaV_launch = np.sqrt(sum(n**2 for n in (v_dep_vec)))
+    #deltaV_target = np.sqrt(sum(n**2 for n in (v_arr_vec)))
+    
+    #FOR RENDEZVOUS
+    deltaV = deltaV_launch + deltaV_target
+    if (deltaV<=v_up_lim):
+        return deltaV
+    else: return 99999
+
+    #FOR FLYBY
+    #deltaV = deltaV_launch
+    #if (deltaV<=v_low_lim):
+     #   return deltaV
+    #else: return 99999
+        
+def func_deltaV_grid(state_launch, state_target, v_up_lim, v_low_lim, mu, tol, dep1_str_mdyy, dep2_str_mdyy, arr1_str_mdyy, arr2_str_mdyy):
+       
+    tof_grid, arr_count, dep_count = func_tof_grid(dep1_str_mdyy, dep2_str_mdyy, arr1_str_mdyy, arr2_str_mdyy)
+    #print('\n', tof_grid)
+    #print('\n', "arr_count = ", arr_count, '\n', "dep_count = ", dep_count, '\n')
+    
+    deltaV_grid = np.zeros((arr_count, dep_count))
+    
+    for a in np.arange(arr_count):
+
+        for d in np.arange(dep_count):
+            
+            if tof_grid[a,d]<=0: deltaV_grid[a,d] = np.nan
+            else:            
+                state_t_launch = func_UVOrbitProp(state_launch, mu, d*24*3600, tol)
+    #### first tof days are 882 for borisov and 212 for oumuamua
+                state_t_target = func_UVOrbitProp(state_target, mu, (882+a)*24*3600, tol) 
+                #print('\n', state_t_launch, '\n', state_t_target)
+                                
+                theta_pro, theta_retro, r1, r2 = func_theta_pro_and_retro(state_t_launch, state_t_target)
+                #print('\n',theta_pro, theta_retro, r1, r2)
+                
+                deltaV_list = []
+
+                for theta in (theta_pro, theta_retro):
+                    #print(func_transfer_possible_check(theta, r1, r2, mu, tof_grid[a,d]))
+                    if func_transfer_possible_check(theta, r1, r2, mu, tof_grid[a,d]) == True:
+                        (v_dep_vec, v_arr_vec) = func_Lambert_vdep_varr_Vallado_ycorrection(state_t_launch, state_t_target, theta, tol, tof_grid[a,d], mu)
+                        #print(v_dep_vec, v_arr_vec)
+                        deltaV = func_calc_deltaV(state_t_launch, state_t_target, v_dep_vec, v_arr_vec, v_up_lim, v_low_lim)
+                        deltaV_list.append(deltaV)
+
+                    else: deltaV_list.append(99999)
+
+                temp_deltaV = min(deltaV_list)
+
+                if temp_deltaV == 99999:
+                    deltaV_grid[a,d] = np.nan
+                else:
+                    deltaV_grid[a,d] = temp_deltaV
+                
+        
+    return (deltaV_grid, dep_count, arr_count)
+                
+
+au = 1.496e8
+day = 24*3600
+
+#oumuamua at 1 Jan 2017
+#state_target = [3.515e-2*au, -3.162*au, 4.49398*au, -2.137e-3*au/day, 9.843e-3*au/day, -1.541e-2*au/day]
+#borisov at 1 Jan 2017
+state_target = [7.249472033259724*au, 14.61063037906177*au, 14.24274452216359*au, -8.241709369476881e-3*au/day, -1.156219024581502e-2*au/day, -1.317135977481448e-2*au/day]
+#earth at 1 Jan 2017
+state_launch = [-1.796e-1*au, 9.6679e-1*au, -3.668e-5*au, -1.72e-2*au/day, -3.211e-3*au/day, 7.927e-7*au/day]
+#v_up_lim = 50 #oumuamua
+v_up_lim = 60 #borisov
+v_low_lim = 20
+mu = 1.327e11
+tol = 1e-10
+dep1_str_mdyy = '1/1/17'
+#dep2_str_mdyy = '12/31/17' #changed for oumuamua
+#arr1_str_mdyy = '8/1/17' #changed for oumuamua
+#arr2_str_mdyy = '1/31/19' #changed for oumuamua
+dep2_str_mdyy = '7/31/20' #changed for borisov
+arr1_str_mdyy = '6/1/19' #changed for borisov
+arr2_str_mdyy = '1/31/22' #changed for borisov
+
+deltaV_grid, dep_count, arr_count = func_deltaV_grid(state_launch, state_target, v_up_lim, v_low_lim, mu, tol, dep1_str_mdyy, dep2_str_mdyy, arr1_str_mdyy, arr2_str_mdyy)
+
+
+x = np.arange(dep_count)
+#print(x)
+y = np.arange(arr_count)
+#print(y)
+
+z = deltaV_grid
+
+plt.contourf(x,y,z, cmap = 'viridis') #'plasma' 'viridis'
+plt.colorbar(label = 'deltaV in km/s')
+#plt.axis(aspect = 'image')
+plt.title('Pork Chop Plot for Earth to Borisov Rendezvous') #update title accordingly
+plt.xlabel('Departure / No. of Days since January 1, 2017')
+plt.ylabel('Arrival / No. of Days since June 1, 2019') ### Jun 1 2019 for Borisov, Aug 1 2017 for Oumuamua
+
+plt.show()
+
